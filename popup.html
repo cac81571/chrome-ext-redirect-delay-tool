@@ -47,17 +47,61 @@
         font-size: 11px;
         color: #666;
       }
+      .section {
+        margin-bottom: 10px;
+      }
+      .inline-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .inline-label label {
+        margin-bottom: 0;
+      }
+      .count-and-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
     </style>
   </head>
   <body>
-    <label>全リクエストの一時停止</label>
-    <div style="margin-bottom: 8px">
-      <label for="allowCount">停止前に通す件数 (N)</label>
-      <input id="allowCount" type="number" min="0" step="1" value="1" style="width: 90px; padding: 4px 6px" />
+    <div class="section">
+      <div class="inline-label" style="margin-bottom: 6px">
+        <input id="enableHeaderFloat" type="checkbox" checked />
+        <label for="targetHeaderName">フロート表示するレスポンスヘッダ名</label>
+      </div>
+      <input
+        id="targetHeaderName"
+        type="text"
+        placeholder="例: server"
+        value="server"
+        style="width: 220px; padding: 4px 6px"
+      />
+      <div class="inline-label" style="margin-top: 8px; margin-bottom: 6px">
+        <input id="enableRedirectDelay" type="checkbox" />
+        <label for="redirectDelayMs">リダイレクト後のリクエスト送信を遅延させる (ms)</label>
+      </div>
+      <input
+        id="redirectDelayMs"
+        type="number"
+        min="0"
+        step="1"
+        value="0"
+        placeholder="例: 300"
+        style="width: 120px; padding: 4px 6px"
+      />
     </div>
-    <div>
-      <button id="pause">一時停止</button>
-      <button id="resume">再開</button>
+    <label>全リクエストの一時停止</label>
+    <div class="section">
+      <label for="allowCount">停止前に通す件数 (N)</label>
+      <div class="count-and-actions">
+        <input id="allowCount" type="number" min="0" step="1" value="1" style="width: 90px; padding: 4px 6px" />
+        <div>
+          <button id="pause">一時停止</button>
+          <button id="resume">再開</button>
+        </div>
+      </div>
     </div>
     <div id="status"></div>
     <div id="blockedList">ブロック中のURLはありません</div>

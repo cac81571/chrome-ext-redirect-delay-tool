@@ -1,34 +1,98 @@
 const DEBUGGER_VERSION = "1.3";
 
 const state = {
-  isPaused: false,
-  tabId: null,
-  queue: [],
-  allowPassCount: 1,
-  passedCount: 0
+  pausedTabs: new Map(),
+  displayTabId: null,
+  headerName: "server",
+  latestHeaderValue: "",
+  floatEnabled: true,
+  redirectDelayEnabled: false,
+  redirectDelayMs: 0
 };
+const redirectTargetsByTab = new Map();
 
-function getQueuedRequestsForUi() {
-  return state.queue.slice(0, 100).map((item) => ({
+function getQueuedRequestsForUi(queue) {
+  return (queue || []).slice(0, 100).map((item) => ({
     url: item.url,
     method: item.method
   }));
 }
 
-function notifyStateToActiveTab() {
-  if (!Number.isInteger(state.tabId)) {
+function notifyStateToTab(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return;
+  }
+  const session = state.pausedTabs.get(tabId);
+  const isPaused = Boolean(session);
+  const queue = session?.queue || [];
+  chrome.tabs.sendMessage(
+    tabId,
+    {
+      type: "stateUpdated",
+      isPaused,
+      queueLength: queue.length,
+      queuedRequests: getQueuedRequestsForUi(queue),
+      tabId,
+      allowPassCount: session?.allowPassCount || 0,
+      passedCount: session?.passedCount || 0
+    },
+    () => {
+      // Ignore send errors if content script is unavailable.
+      void chrome.runtime.lastError;
+    }
+  );
+}
+
+function getOrCreateSession(tabId, allowPassCount = 0) {
+  let session = state.pausedTabs.get(tabId);
+  if (!session) {
+    session = {
+      queue: [],
+      allowPassCount,
+      passedCount: 0
+    };
+    state.pausedTabs.set(tabId, session);
+  }
+  return session;
+}
+
+function normalizeHeaderName(value) {
+  const headerName = String(value || "").trim();
+  return headerName || "server";
+}
+
+function updateHeaderDisplay(tabId, headerName, value) {
+  if (!Number.isInteger(tabId)) {
     return;
   }
   chrome.tabs.sendMessage(
-    state.tabId,
+    tabId,
     {
-      type: "stateUpdated",
-      isPaused: state.isPaused,
-      queueLength: state.queue.length,
-      queuedRequests: getQueuedRequestsForUi(),
-      tabId: state.tabId,
-      allowPassCount: state.allowPassCount,
-      passedCount: state.passedCount
+      type: "headerValueUpdated",
+      headerName,
+      headerValue: value,
+      floatEnabled: state.floatEnabled
+    },
+    () => {
+      // Ignore send errors if content script is unavailable.
+      void chrome.runtime.lastError;
+    }
+  );
+}
+
+function notifyRedirectDelayStatus(tabId, isDelaying, delayMs) {
+  if (!Number.isInteger(tabId)) {
+    return;
+  }
+  chrome.tabs.sendMessage(
+    tabId,
+    {
+      type: "redirectDelayStatus",
+      isDelaying,
+      delayMs,
+      floatEnabled: state.floatEnabled,
+      headerName: state.headerName,
+      headerValue: state.latestHeaderValue
     },
     () => {
       // Ignore send errors if content script is unavailable.
@@ -85,17 +149,68 @@ function normalizeCount(value) {
   return Math.floor(parsed);
 }
 
+function normalizeDelayMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function registerRedirectTarget(tabId, redirectUrl) {
+  if (!Number.isInteger(tabId) || tabId < 0) {
+    return;
+  }
+  const url = String(redirectUrl || "").trim();
+  if (!url) {
+    return;
+  }
+  let targetMap = redirectTargetsByTab.get(tabId);
+  if (!targetMap) {
+    targetMap = new Map();
+    redirectTargetsByTab.set(tabId, targetMap);
+  }
+  const prevCount = targetMap.get(url) || 0;
+  targetMap.set(url, prevCount + 1);
+}
+
+function consumeRedirectTarget(tabId, requestUrl) {
+  const targetMap = redirectTargetsByTab.get(tabId);
+  if (!targetMap) {
+    return false;
+  }
+  const url = String(requestUrl || "").trim();
+  if (!url) {
+    return false;
+  }
+  const count = targetMap.get(url) || 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    targetMap.delete(url);
+  } else {
+    targetMap.set(url, count - 1);
+  }
+  if (targetMap.size === 0) {
+    redirectTargetsByTab.delete(tabId);
+  }
+  return true;
+}
+
 async function pauseRequests(tabId, allowPassCount) {
   if (!Number.isInteger(tabId)) {
     throw new Error("有効なタブが見つかりません。");
   }
 
-  if (state.isPaused && state.tabId === tabId) {
+  if (state.pausedTabs.has(tabId)) {
     return;
-  }
-
-  if (state.isPaused && state.tabId !== null) {
-    await resumeRequests();
   }
 
   await attachDebugger(tabId);
@@ -108,25 +223,16 @@ async function pauseRequests(tabId, allowPassCount) {
     throw error;
   }
 
-  state.isPaused = true;
-  state.tabId = tabId;
-  state.queue = [];
-  state.allowPassCount = normalizeCount(allowPassCount);
-  state.passedCount = 0;
-  notifyStateToActiveTab();
+  getOrCreateSession(tabId, normalizeCount(allowPassCount));
+  notifyStateToTab(tabId);
 }
 
-async function resumeRequests() {
-  if (!state.isPaused || state.tabId === null) {
-    state.isPaused = false;
-    state.tabId = null;
-    state.queue = [];
-    state.passedCount = 0;
+async function resumeSingleTab(tabId) {
+  const session = state.pausedTabs.get(tabId);
+  if (!session) {
     return;
   }
-
-  const tabId = state.tabId;
-  const queuedRequestIds = state.queue.map((item) => item.requestId);
+  const queuedRequestIds = session.queue.map((item) => item.requestId);
 
   for (const requestId of queuedRequestIds) {
     try {
@@ -143,65 +249,164 @@ async function resumeRequests() {
   }
 
   await detachDebugger(tabId).catch(() => {});
-  state.isPaused = false;
-  state.tabId = null;
-  state.queue = [];
-  state.passedCount = 0;
-  notifyStateToActiveTab();
+  state.pausedTabs.delete(tabId);
+  redirectTargetsByTab.delete(tabId);
+  notifyStateToTab(tabId);
+}
+
+async function resumeRequests(tabId) {
+  if (Number.isInteger(tabId)) {
+    await resumeSingleTab(tabId);
+    return;
+  }
+  const tabIds = [...state.pausedTabs.keys()];
+  for (const pausedTabId of tabIds) {
+    await resumeSingleTab(pausedTabId);
+  }
+}
+
+async function handleFetchRequestPaused(source, params) {
+  const tabId = source.tabId;
+  const session = state.pausedTabs.get(tabId);
+  if (!session) {
+    return;
+  }
+
+  const requestUrl = params.request?.url || "";
+  if (state.redirectDelayEnabled && state.redirectDelayMs > 0 && consumeRedirectTarget(tabId, requestUrl)) {
+    notifyRedirectDelayStatus(tabId, true, state.redirectDelayMs);
+    await sleep(state.redirectDelayMs);
+    notifyRedirectDelayStatus(tabId, false, state.redirectDelayMs);
+  }
+
+  if (session.passedCount < session.allowPassCount) {
+    session.passedCount += 1;
+    await sendDebuggerCommand(tabId, "Fetch.continueRequest", {
+      requestId: params.requestId
+    }).catch(() => {});
+    notifyStateToTab(tabId);
+    return;
+  }
+
+  session.queue.push({
+    requestId: params.requestId,
+    url: requestUrl,
+    method: params.request?.method || ""
+  });
+  notifyStateToTab(tabId);
 }
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (!state.isPaused || source.tabId !== state.tabId) {
-    return;
-  }
   if (method !== "Fetch.requestPaused") {
     return;
   }
-
-  if (state.passedCount < state.allowPassCount) {
-    state.passedCount += 1;
-    sendDebuggerCommand(state.tabId, "Fetch.continueRequest", {
-      requestId: params.requestId
-    }).catch(() => {});
-    notifyStateToActiveTab();
-    return;
-  }
-
-  state.queue.push({
-    requestId: params.requestId,
-    url: params.request?.url || "",
-    method: params.request?.method || ""
-  });
-  notifyStateToActiveTab();
+  handleFetchRequestPaused(source, params).catch(() => {});
 });
 
 chrome.debugger.onDetach.addListener((source) => {
-  if (source.tabId !== state.tabId) {
+  if (!state.pausedTabs.has(source.tabId)) {
     return;
   }
-  state.isPaused = false;
-  state.tabId = null;
-  state.queue = [];
-  state.passedCount = 0;
+  state.pausedTabs.delete(source.tabId);
+  redirectTargetsByTab.delete(source.tabId);
+  notifyStateToTab(source.tabId);
 });
 
+chrome.webRequest.onBeforeRedirect.addListener(
+  (details) => {
+    registerRedirectTarget(details.tabId, details.redirectUrl);
+  },
+  { urls: ["<all_urls>"] }
+);
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (!Number.isInteger(details.tabId) || details.tabId < 0) {
+      return;
+    }
+    if (details.tabId !== state.displayTabId) {
+      return;
+    }
+    if (!state.floatEnabled) {
+      return;
+    }
+    const targetHeaderName = normalizeHeaderName(state.headerName);
+    const matchedHeader = (details.responseHeaders || []).find(
+      (item) => String(item.name || "").toLowerCase() === targetHeaderName.toLowerCase()
+    );
+    if (!matchedHeader) {
+      return;
+    }
+    const nextValue = String(matchedHeader.value || "").trim();
+    if (!nextValue || nextValue === state.latestHeaderValue) {
+      return;
+    }
+    state.latestHeaderValue = nextValue;
+    updateHeaderDisplay(details.tabId, targetHeaderName, nextValue);
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders"]
+);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "setHeaderDisplayConfig") {
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
+    if (!Number.isInteger(tabId)) {
+      sendResponse({ ok: false, error: "有効なタブが見つかりません。" });
+      return true;
+    }
+    state.displayTabId = tabId;
+    state.headerName = normalizeHeaderName(message.headerName);
+    state.floatEnabled = Boolean(message.floatEnabled);
+    state.redirectDelayEnabled = Boolean(message.redirectDelayEnabled);
+    state.redirectDelayMs = normalizeDelayMs(message.redirectDelayMs);
+    updateHeaderDisplay(state.displayTabId, state.headerName, state.latestHeaderValue);
+    sendResponse({
+      ok: true,
+      tabId: state.displayTabId,
+      headerName: state.headerName,
+      headerValue: state.latestHeaderValue,
+      floatEnabled: state.floatEnabled,
+      redirectDelayEnabled: state.redirectDelayEnabled,
+      redirectDelayMs: state.redirectDelayMs
+    });
+    return true;
+  }
+
+  if (message?.type === "getHeaderDisplayConfig") {
+    const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
+    if (Number.isInteger(tabId)) {
+      state.displayTabId = tabId;
+    }
+    sendResponse({
+      ok: true,
+      tabId: state.displayTabId,
+      headerName: state.headerName,
+      headerValue: state.latestHeaderValue,
+      floatEnabled: state.floatEnabled,
+      redirectDelayEnabled: state.redirectDelayEnabled,
+      redirectDelayMs: state.redirectDelayMs
+    });
+    return true;
+  }
+
   if (message?.type === "setPaused") {
     const isPaused = Boolean(message.isPaused);
     const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
     const allowPassCount = normalizeCount(message.allowPassCount);
 
-    const task = isPaused ? pauseRequests(tabId, allowPassCount) : resumeRequests();
+    const task = isPaused ? pauseRequests(tabId, allowPassCount) : resumeRequests(tabId);
     task
       .then(() => {
+        const session = Number.isInteger(tabId) ? state.pausedTabs.get(tabId) : null;
         sendResponse({
           ok: true,
-          isPaused: state.isPaused,
-          queueLength: state.queue.length,
-          queuedRequests: getQueuedRequestsForUi(),
-          tabId: state.tabId,
-          allowPassCount: state.allowPassCount,
-          passedCount: state.passedCount
+          isPaused: Boolean(session),
+          queueLength: session?.queue.length || 0,
+          queuedRequests: getQueuedRequestsForUi(session?.queue || []),
+          tabId: Number.isInteger(tabId) ? tabId : null,
+          allowPassCount: session?.allowPassCount || 0,
+          passedCount: session?.passedCount || 0
         });
       })
       .catch((error) => sendResponse({ ok: false, error: String(error) }));
@@ -210,15 +415,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "getPaused") {
     const senderTabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
-    const isPausedForSender = state.isPaused && senderTabId === state.tabId;
+    const session = Number.isInteger(senderTabId) ? state.pausedTabs.get(senderTabId) : null;
     sendResponse({
       ok: true,
-      isPaused: isPausedForSender,
-      queueLength: isPausedForSender ? state.queue.length : 0,
-      queuedRequests: isPausedForSender ? getQueuedRequestsForUi() : [],
-      tabId: state.tabId,
-      allowPassCount: state.allowPassCount,
-      passedCount: state.passedCount
+      isPaused: Boolean(session),
+      queueLength: session?.queue.length || 0,
+      queuedRequests: getQueuedRequestsForUi(session?.queue || []),
+      tabId: Number.isInteger(senderTabId) ? senderTabId : null,
+      allowPassCount: session?.allowPassCount || 0,
+      passedCount: session?.passedCount || 0
     });
     return true;
   }

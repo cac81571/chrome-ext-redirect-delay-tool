@@ -1,6 +1,10 @@
 const pauseButton = document.getElementById("pause");
 const resumeButton = document.getElementById("resume");
 const allowCountInput = document.getElementById("allowCount");
+const enableHeaderFloatInput = document.getElementById("enableHeaderFloat");
+const targetHeaderNameInput = document.getElementById("targetHeaderName");
+const enableRedirectDelayInput = document.getElementById("enableRedirectDelay");
+const redirectDelayMsInput = document.getElementById("redirectDelayMs");
 const statusElement = document.getElementById("status");
 const blockedListElement = document.getElementById("blockedList");
 
@@ -56,6 +60,36 @@ function getAllowCount() {
   return Math.floor(value);
 }
 
+function getTargetHeaderName() {
+  return String(targetHeaderNameInput.value || "").trim();
+}
+
+function getRedirectDelayMs() {
+  const value = Number(redirectDelayMsInput.value);
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
+async function syncHeaderDisplayConfig(tabId) {
+  const response = await sendMessage({
+    type: "setHeaderDisplayConfig",
+    tabId,
+    headerName: getTargetHeaderName(),
+    floatEnabled: Boolean(enableHeaderFloatInput.checked),
+    redirectDelayEnabled: Boolean(enableRedirectDelayInput.checked),
+    redirectDelayMs: getRedirectDelayMs()
+  });
+  targetHeaderNameInput.value = response.headerName || "";
+  enableHeaderFloatInput.checked = Boolean(response.floatEnabled);
+  targetHeaderNameInput.disabled = !enableHeaderFloatInput.checked;
+  enableRedirectDelayInput.checked = Boolean(response.redirectDelayEnabled);
+  redirectDelayMsInput.disabled = !enableRedirectDelayInput.checked;
+  redirectDelayMsInput.value = String(response.redirectDelayMs || 0);
+  return response;
+}
+
 function renderBlockedList(queuedRequests) {
   blockedListElement.textContent = "";
   if (!Array.isArray(queuedRequests) || queuedRequests.length === 0) {
@@ -74,6 +108,21 @@ function renderBlockedList(queuedRequests) {
 async function loadCurrentState() {
   try {
     const tabId = await getActiveTabId();
+    const headerConfig = await sendMessage({
+      type: "getHeaderDisplayConfig",
+      tabId
+    });
+    if (document.activeElement !== targetHeaderNameInput) {
+      targetHeaderNameInput.value = headerConfig.headerName || "server";
+    }
+    enableHeaderFloatInput.checked = Boolean(headerConfig.floatEnabled);
+    targetHeaderNameInput.disabled = !enableHeaderFloatInput.checked;
+    enableRedirectDelayInput.checked = Boolean(headerConfig.redirectDelayEnabled);
+    redirectDelayMsInput.disabled = !enableRedirectDelayInput.checked;
+    if (document.activeElement !== redirectDelayMsInput) {
+      redirectDelayMsInput.value = String(headerConfig.redirectDelayMs || 0);
+    }
+
     const response = await sendMessage({ type: "getPaused", tabId });
     updateButtonState(response.isPaused);
     if (response.isPaused) {
@@ -96,6 +145,7 @@ pauseButton.addEventListener("click", async () => {
   try {
     const tabId = await getActiveTabId();
     const allowPassCount = getAllowCount();
+    await syncHeaderDisplayConfig(tabId);
     const response = await sendMessage({
       type: "setPaused",
       isPaused: true,
@@ -114,12 +164,51 @@ pauseButton.addEventListener("click", async () => {
 
 resumeButton.addEventListener("click", async () => {
   try {
-    const response = await sendMessage({ type: "setPaused", isPaused: false });
+    const tabId = await getActiveTabId();
+    await syncHeaderDisplayConfig(tabId);
+    const response = await sendMessage({ type: "setPaused", isPaused: false, tabId });
     updateButtonState(false);
     renderBlockedList(response.queuedRequests || []);
     showStatus("キュー済みリクエストを再開しました。");
   } catch (error) {
     showStatus(`再開失敗: ${error.message}`, true);
+  }
+});
+
+targetHeaderNameInput.addEventListener("change", async () => {
+  try {
+    const tabId = await getActiveTabId();
+    await syncHeaderDisplayConfig(tabId);
+    showStatus("ヘッダ表示設定を更新しました。");
+  } catch (error) {
+    showStatus(`ヘッダ設定更新失敗: ${error.message}`, true);
+  }
+});
+
+enableHeaderFloatInput.addEventListener("change", async () => {
+  try {
+    const tabId = await getActiveTabId();
+    await syncHeaderDisplayConfig(tabId);
+  } catch (error) {
+    showStatus(`フロート設定更新失敗: ${error.message}`, true);
+  }
+});
+
+enableRedirectDelayInput.addEventListener("change", async () => {
+  try {
+    const tabId = await getActiveTabId();
+    await syncHeaderDisplayConfig(tabId);
+  } catch (error) {
+    showStatus(`遅延設定更新失敗: ${error.message}`, true);
+  }
+});
+
+redirectDelayMsInput.addEventListener("change", async () => {
+  try {
+    const tabId = await getActiveTabId();
+    await syncHeaderDisplayConfig(tabId);
+  } catch (error) {
+    showStatus(`遅延時間更新失敗: ${error.message}`, true);
   }
 });
 

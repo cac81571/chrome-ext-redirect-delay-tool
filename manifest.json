@@ -3,7 +3,7 @@
   "name": "Request Breaker",
   "version": "1.0.0",
   "description": "Pause and resume requests on the active tab.",
-  "permissions": ["debugger", "tabs"],
+  "permissions": ["debugger", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service_worker.js"
@@ -11,5 +11,12 @@
   "action": {
     "default_title": "Request Breaker",
     "default_popup": "popup.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }
