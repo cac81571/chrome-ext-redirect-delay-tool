@@ -101,7 +101,7 @@ async function loadCurrentState() {
       tabId
     });
     if (document.activeElement !== targetHeaderNameInput) {
-      targetHeaderNameInput.value = headerConfig.headerName || "server";
+      targetHeaderNameInput.value = headerConfig.headerName || "X-App-Node";
     }
     enableHeaderFloatInput.checked = Boolean(headerConfig.floatEnabled);
     targetHeaderNameInput.disabled = !enableHeaderFloatInput.checked;

@@ -333,7 +333,7 @@ function hashToColor(text) {
 }
 
 function updateFloat(headerName, headerValue) {
-  const safeHeaderName = String(headerName || "").trim() || "server";
+  const safeHeaderName = String(headerName || "").trim() || "X-App-Node";
   const safeHeaderValue = String(headerValue || "").trim();
   const nextText = safeHeaderValue ? `${safeHeaderName}: ${safeHeaderValue}` : `${safeHeaderName}: (値なし)`;
   const element = getOrCreateFloatElement();
@@ -391,5 +391,24 @@ async function syncPausedPanelState() {
   }
 }
 
+async function syncHeaderFloatState() {
+  try {
+    const response = await sendRuntimeMessage({ type: "getHeaderDisplayConfig" });
+    if (!response?.ok) {
+      return;
+    }
+    setFloatVisibility(Boolean(response.floatEnabled));
+    if (response.floatEnabled) {
+      updateFloat(response.headerName, response.headerValue);
+    }
+  } catch (_error) {
+    // Ignore transient messaging errors.
+  }
+}
+
 syncPausedPanelState();
-setInterval(syncPausedPanelState, 1000);
+syncHeaderFloatState();
+setInterval(() => {
+  syncPausedPanelState();
+  syncHeaderFloatState();
+}, 1000);

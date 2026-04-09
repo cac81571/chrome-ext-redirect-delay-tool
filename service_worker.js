@@ -1,13 +1,32 @@
 const DEBUGGER_VERSION = "1.3";
 
+const DEFAULT_HEADER_NAME = "X-App-Node";
+
 const state = {
   pausedTabs: new Map(),
   displayTabId: null,
-  headerName: "server",
+  headerName: DEFAULT_HEADER_NAME,
   latestHeaderValue: "",
   floatEnabled: true,
   redirectAutoPauseEnabled: false
 };
+
+async function persistHeaderDisplaySettings() {
+  await chrome.storage.local.set({
+    headerDisplayHeaderName: state.headerName,
+    headerDisplayFloatEnabled: state.floatEnabled,
+    headerDisplayRedirectAutoPause: state.redirectAutoPauseEnabled
+  });
+}
+
+const _stored = await chrome.storage.local.get({
+  headerDisplayHeaderName: DEFAULT_HEADER_NAME,
+  headerDisplayFloatEnabled: true,
+  headerDisplayRedirectAutoPause: false
+});
+state.headerName = normalizeHeaderName(_stored.headerDisplayHeaderName);
+state.floatEnabled = _stored.headerDisplayFloatEnabled;
+state.redirectAutoPauseEnabled = _stored.headerDisplayRedirectAutoPause;
 
 function getQueuedRequestsForUi(queue) {
   return (queue || []).slice(0, 100).map((item) => ({
@@ -56,7 +75,7 @@ function getOrCreateSession(tabId, allowPassCount = 0) {
 
 function normalizeHeaderName(value) {
   const headerName = String(value || "").trim();
-  return headerName || "server";
+  return headerName || DEFAULT_HEADER_NAME;
 }
 
 function updateHeaderDisplay(tabId, headerName, value) {
@@ -129,6 +148,11 @@ function normalizeCount(value) {
 function isRedirectStatusCode(statusCode) {
   const code = Number(statusCode);
   return Number.isFinite(code) && code >= 300 && code < 400;
+}
+
+/** タブのトップレベル HTML のみ（iframe の sub_frame は対象外） */
+function isTopLevelMainFrameDocument(resourceType) {
+  return resourceType === "main_frame";
 }
 
 async function pauseRequests(tabId, allowPassCount) {
@@ -246,17 +270,14 @@ chrome.webRequest.onHeadersReceived.addListener(
     if (!state.floatEnabled) {
       return;
     }
+    if (!isTopLevelMainFrameDocument(details.type)) {
+      return;
+    }
     const targetHeaderName = normalizeHeaderName(state.headerName);
     const matchedHeader = (details.responseHeaders || []).find(
       (item) => String(item.name || "").toLowerCase() === targetHeaderName.toLowerCase()
     );
-    if (!matchedHeader) {
-      return;
-    }
-    const nextValue = String(matchedHeader.value || "").trim();
-    if (!nextValue || nextValue === state.latestHeaderValue) {
-      return;
-    }
+    const nextValue = matchedHeader ? String(matchedHeader.value || "").trim() : "";
     state.latestHeaderValue = nextValue;
     updateHeaderDisplay(details.tabId, targetHeaderName, nextValue);
   },
@@ -276,14 +297,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     state.floatEnabled = Boolean(message.floatEnabled);
     state.redirectAutoPauseEnabled = Boolean(message.redirectAutoPauseEnabled);
     updateHeaderDisplay(state.displayTabId, state.headerName, state.latestHeaderValue);
-    sendResponse({
-      ok: true,
-      tabId: state.displayTabId,
-      headerName: state.headerName,
-      headerValue: state.latestHeaderValue,
-      floatEnabled: state.floatEnabled,
-      redirectAutoPauseEnabled: state.redirectAutoPauseEnabled
-    });
+    persistHeaderDisplaySettings()
+      .then(() => {
+        sendResponse({
+          ok: true,
+          tabId: state.displayTabId,
+          headerName: state.headerName,
+          headerValue: state.latestHeaderValue,
+          floatEnabled: state.floatEnabled,
+          redirectAutoPauseEnabled: state.redirectAutoPauseEnabled
+        });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: String(error) });
+      });
     return true;
   }
 
