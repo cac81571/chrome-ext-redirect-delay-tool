@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Request Breaker",
+  "version": "1.0.0",
+  "description": "Pause and resume requests on the active tab.",
+  "permissions": ["debugger", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "Request Breaker",
+    "default_popup": "popup.html"
+  }
+}
