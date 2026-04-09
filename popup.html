@@ -2,7 +2,7 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <title>Request Breaker</title>
+    <title>Redirect Delay</title>
     <style>
       body {
         font-family: Arial, sans-serif;
@@ -14,63 +14,108 @@
         font-size: 12px;
         margin-bottom: 6px;
       }
-      button {
-        padding: 8px 10px;
-        margin-right: 6px;
+      .section {
+        margin-bottom: 10px;
+      }
+      .switch-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid #e0e0e0;
+      }
+      .switch-row > span {
+        font-size: 13px;
+        font-weight: 600;
+        color: #222;
+      }
+      /* スライド式スイッチ（チェックボックスは使わない） */
+      .switch {
+        position: relative;
+        flex-shrink: 0;
+        width: 48px;
+        height: 26px;
+        border: none;
+        padding: 0;
+        background: transparent;
         cursor: pointer;
       }
-      #status {
-        margin-top: 10px;
+      .switch:focus-visible {
+        outline: 2px solid #1a73e8;
+        outline-offset: 2px;
+        border-radius: 13px;
+      }
+      .switch-track {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 13px;
+        background: #bdbdbd;
+        transition: background 0.2s ease;
+      }
+      .switch-thumb {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+        transition: transform 0.2s ease;
+      }
+      .switch.is-on .switch-track {
+        background: #34a853;
+      }
+      .switch.is-on .switch-thumb {
+        transform: translateX(22px);
+      }
+      .save-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+      }
+      #saveButton {
+        padding: 8px 16px;
+        cursor: pointer;
+      }
+      #saveStatus {
         font-size: 12px;
         color: #333;
+        min-height: 1.2em;
       }
-      #blockedList {
-        margin-top: 10px;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        max-height: 180px;
-        overflow-y: auto;
-        padding: 6px;
-        font-size: 11px;
-        background: #fafafa;
-      }
-      .blocked-item {
-        padding: 4px 0;
-        border-bottom: 1px dashed #ddd;
-        word-break: break-all;
-      }
-      .blocked-item:last-child {
-        border-bottom: none;
+      #saveStatus.is-error {
+        color: #c00;
       }
       .hint {
         margin-top: 8px;
         font-size: 11px;
         color: #666;
       }
-      .section {
-        margin-bottom: 10px;
-      }
-      .inline-label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .inline-label label {
-        margin-bottom: 0;
-      }
-      .count-and-actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
     </style>
   </head>
   <body>
     <div class="section">
-      <div class="inline-label" style="margin-bottom: 6px">
-        <input id="enableHeaderFloat" type="checkbox" checked />
-        <label for="targetHeaderName">フロート表示するレスポンスヘッダ名</label>
+      <div class="switch-row">
+        <span id="switchLabel">拡張機能</span>
+        <button
+          type="button"
+          id="extensionSwitch"
+          class="switch is-on"
+          role="switch"
+          aria-checked="true"
+          aria-labelledby="switchLabel"
+        >
+          <span class="switch-track" aria-hidden="true"></span>
+          <span class="switch-thumb" aria-hidden="true"></span>
+        </button>
       </div>
+
+      <label for="targetHeaderName">フロート表示するレスポンスヘッダ名</label>
       <input
         id="targetHeaderName"
         type="text"
@@ -78,27 +123,21 @@
         value="X-App-Node"
         style="width: 220px; padding: 4px 6px"
       />
-      <div class="inline-label" style="margin-top: 8px; margin-bottom: 6px">
-        <input id="enableRedirectDelay" type="checkbox" />
-        <label for="enableRedirectDelay">リダレクト受信時に全リクエスト停止を開始</label>
+      <label for="redirectSleepMs" style="margin-top: 10px">リダイレクト待機時間（ミリ秒）</label>
+      <input
+        id="redirectSleepMs"
+        type="number"
+        min="0"
+        max="120000"
+        step="100"
+        value="1000"
+        style="width: 120px; padding: 4px 6px"
+      />
+      <div class="save-row">
+        <button type="button" id="saveButton">保存</button>
+        <span id="saveStatus" aria-live="polite"></span>
       </div>
-    </div>
-    <label>全リクエストの一時停止</label>
-    <div class="section">
-      <label for="allowCount">停止前に通す件数 (N)</label>
-      <div class="count-and-actions">
-        <input id="allowCount" type="number" min="0" step="1" value="1" style="width: 90px; padding: 4px 6px" />
-        <div>
-          <button id="pause">一時停止</button>
-          <button id="resume">再開</button>
-        </div>
-      </div>
-    </div>
-    <div id="status"></div>
-    <div id="blockedList">ブロック中のURLはありません</div>
-    <div class="hint">
-      「一時停止」で最初のN件だけ送信し、それ以降をキューに保持します。<br />
-      「再開」でキュー済み通信を送出します。
+      <p class="hint">変更をストレージに反映するには「保存」を押してください。</p>
     </div>
     <script src="popup.js"></script>
   </body>

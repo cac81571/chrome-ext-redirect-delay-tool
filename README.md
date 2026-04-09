@@ -1,4 +1,4 @@
-# Request Breaker (Chrome Extension)
+# Redirect Delay (Chrome Extension)
 
 Chrome Manifest V3 で、全リクエストを一時停止/再開する拡張です。
 

@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Request Breaker",
+  "name": "Redirect Delay",
   "version": "1.0.0",
-  "description": "Pause and resume requests on the active tab.",
-  "permissions": ["debugger", "storage", "tabs", "webRequest"],
+  "description": "Configurable delay after HTTP redirects, with optional response header float.",
+  "permissions": ["debugger", "storage", "tabs", "webRequest", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service_worker.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Request Breaker",
+    "default_title": "Redirect Delay",
     "default_popup": "popup.html"
   },
   "content_scripts": [
