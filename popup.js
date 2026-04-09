@@ -4,7 +4,6 @@ const allowCountInput = document.getElementById("allowCount");
 const enableHeaderFloatInput = document.getElementById("enableHeaderFloat");
 const targetHeaderNameInput = document.getElementById("targetHeaderName");
 const enableRedirectDelayInput = document.getElementById("enableRedirectDelay");
-const redirectDelayMsInput = document.getElementById("redirectDelayMs");
 const statusElement = document.getElementById("status");
 const blockedListElement = document.getElementById("blockedList");
 
@@ -64,29 +63,18 @@ function getTargetHeaderName() {
   return String(targetHeaderNameInput.value || "").trim();
 }
 
-function getRedirectDelayMs() {
-  const value = Number(redirectDelayMsInput.value);
-  if (!Number.isFinite(value) || value < 0) {
-    return 0;
-  }
-  return Math.floor(value);
-}
-
 async function syncHeaderDisplayConfig(tabId) {
   const response = await sendMessage({
     type: "setHeaderDisplayConfig",
     tabId,
     headerName: getTargetHeaderName(),
     floatEnabled: Boolean(enableHeaderFloatInput.checked),
-    redirectDelayEnabled: Boolean(enableRedirectDelayInput.checked),
-    redirectDelayMs: getRedirectDelayMs()
+    redirectAutoPauseEnabled: Boolean(enableRedirectDelayInput.checked)
   });
   targetHeaderNameInput.value = response.headerName || "";
   enableHeaderFloatInput.checked = Boolean(response.floatEnabled);
   targetHeaderNameInput.disabled = !enableHeaderFloatInput.checked;
-  enableRedirectDelayInput.checked = Boolean(response.redirectDelayEnabled);
-  redirectDelayMsInput.disabled = !enableRedirectDelayInput.checked;
-  redirectDelayMsInput.value = String(response.redirectDelayMs || 0);
+  enableRedirectDelayInput.checked = Boolean(response.redirectAutoPauseEnabled);
   return response;
 }
 
@@ -117,11 +105,7 @@ async function loadCurrentState() {
     }
     enableHeaderFloatInput.checked = Boolean(headerConfig.floatEnabled);
     targetHeaderNameInput.disabled = !enableHeaderFloatInput.checked;
-    enableRedirectDelayInput.checked = Boolean(headerConfig.redirectDelayEnabled);
-    redirectDelayMsInput.disabled = !enableRedirectDelayInput.checked;
-    if (document.activeElement !== redirectDelayMsInput) {
-      redirectDelayMsInput.value = String(headerConfig.redirectDelayMs || 0);
-    }
+    enableRedirectDelayInput.checked = Boolean(headerConfig.redirectAutoPauseEnabled);
 
     const response = await sendMessage({ type: "getPaused", tabId });
     updateButtonState(response.isPaused);
@@ -200,15 +184,6 @@ enableRedirectDelayInput.addEventListener("change", async () => {
     await syncHeaderDisplayConfig(tabId);
   } catch (error) {
     showStatus(`遅延設定更新失敗: ${error.message}`, true);
-  }
-});
-
-redirectDelayMsInput.addEventListener("change", async () => {
-  try {
-    const tabId = await getActiveTabId();
-    await syncHeaderDisplayConfig(tabId);
-  } catch (error) {
-    showStatus(`遅延時間更新失敗: ${error.message}`, true);
   }
 });
 

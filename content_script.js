@@ -5,8 +5,6 @@ const PAUSE_PANEL_POSITION_STORAGE_KEY = "__req_breaker_pause_panel_position__";
 
 let currentText = "";
 let dragState = null;
-let lastHeaderName = "server";
-let lastHeaderValue = "";
 let panelDragState = null;
 
 function sendRuntimeMessage(message) {
@@ -337,24 +335,12 @@ function hashToColor(text) {
 function updateFloat(headerName, headerValue) {
   const safeHeaderName = String(headerName || "").trim() || "server";
   const safeHeaderValue = String(headerValue || "").trim();
-  lastHeaderName = safeHeaderName;
-  lastHeaderValue = safeHeaderValue;
   const nextText = safeHeaderValue ? `${safeHeaderName}: ${safeHeaderValue}` : `${safeHeaderName}: (値なし)`;
   const element = getOrCreateFloatElement();
   element.textContent = nextText;
 
   if (nextText !== currentText) {
     element.style.backgroundColor = hashToColor(nextText);
-    currentText = nextText;
-  }
-}
-
-function showRedirectDelayMessage(delayMs) {
-  const element = getOrCreateFloatElement();
-  const nextText = `Redirect delay: ${delayMs}ms`;
-  element.textContent = nextText;
-  if (nextText !== currentText) {
-    element.style.backgroundColor = "hsla(28, 90%, 45%, 0.78)";
     currentText = nextText;
   }
 }
@@ -369,20 +355,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     setFloatVisibility(Boolean(message.floatEnabled));
     if (message.floatEnabled) {
       updateFloat(message.headerName, message.headerValue);
-    }
-    sendResponse({ ok: true });
-    return true;
-  }
-  if (message?.type === "redirectDelayStatus") {
-    setFloatVisibility(Boolean(message.floatEnabled));
-    if (!message.floatEnabled) {
-      sendResponse({ ok: true });
-      return true;
-    }
-    if (message.isDelaying) {
-      showRedirectDelayMessage(message.delayMs || 0);
-    } else {
-      updateFloat(message.headerName || lastHeaderName, message.headerValue || lastHeaderValue);
     }
     sendResponse({ ok: true });
     return true;

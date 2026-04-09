@@ -6,10 +6,8 @@ const state = {
   headerName: "server",
   latestHeaderValue: "",
   floatEnabled: true,
-  redirectDelayEnabled: false,
-  redirectDelayMs: 0
+  redirectAutoPauseEnabled: false
 };
-const redirectTargetsByTab = new Map();
 
 function getQueuedRequestsForUi(queue) {
   return (queue || []).slice(0, 100).map((item) => ({
@@ -80,27 +78,6 @@ function updateHeaderDisplay(tabId, headerName, value) {
   );
 }
 
-function notifyRedirectDelayStatus(tabId, isDelaying, delayMs) {
-  if (!Number.isInteger(tabId)) {
-    return;
-  }
-  chrome.tabs.sendMessage(
-    tabId,
-    {
-      type: "redirectDelayStatus",
-      isDelaying,
-      delayMs,
-      floatEnabled: state.floatEnabled,
-      headerName: state.headerName,
-      headerValue: state.latestHeaderValue
-    },
-    () => {
-      // Ignore send errors if content script is unavailable.
-      void chrome.runtime.lastError;
-    }
-  );
-}
-
 function debuggee(tabId) {
   return { tabId };
 }
@@ -149,59 +126,9 @@ function normalizeCount(value) {
   return Math.floor(parsed);
 }
 
-function normalizeDelayMs(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return 0;
-  }
-  return Math.floor(parsed);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function registerRedirectTarget(tabId, redirectUrl) {
-  if (!Number.isInteger(tabId) || tabId < 0) {
-    return;
-  }
-  const url = String(redirectUrl || "").trim();
-  if (!url) {
-    return;
-  }
-  let targetMap = redirectTargetsByTab.get(tabId);
-  if (!targetMap) {
-    targetMap = new Map();
-    redirectTargetsByTab.set(tabId, targetMap);
-  }
-  const prevCount = targetMap.get(url) || 0;
-  targetMap.set(url, prevCount + 1);
-}
-
-function consumeRedirectTarget(tabId, requestUrl) {
-  const targetMap = redirectTargetsByTab.get(tabId);
-  if (!targetMap) {
-    return false;
-  }
-  const url = String(requestUrl || "").trim();
-  if (!url) {
-    return false;
-  }
-  const count = targetMap.get(url) || 0;
-  if (count <= 0) {
-    return false;
-  }
-  if (count === 1) {
-    targetMap.delete(url);
-  } else {
-    targetMap.set(url, count - 1);
-  }
-  if (targetMap.size === 0) {
-    redirectTargetsByTab.delete(tabId);
-  }
-  return true;
+function isRedirectStatusCode(statusCode) {
+  const code = Number(statusCode);
+  return Number.isFinite(code) && code >= 300 && code < 400;
 }
 
 async function pauseRequests(tabId, allowPassCount) {
@@ -216,7 +143,7 @@ async function pauseRequests(tabId, allowPassCount) {
   await attachDebugger(tabId);
   try {
     await sendDebuggerCommand(tabId, "Fetch.enable", {
-      patterns: [{ urlPattern: "*" }]
+      patterns: [{ urlPattern: "*", requestStage: "Request" }]
     });
   } catch (error) {
     await detachDebugger(tabId).catch(() => {});
@@ -250,7 +177,6 @@ async function resumeSingleTab(tabId) {
 
   await detachDebugger(tabId).catch(() => {});
   state.pausedTabs.delete(tabId);
-  redirectTargetsByTab.delete(tabId);
   notifyStateToTab(tabId);
 }
 
@@ -273,11 +199,6 @@ async function handleFetchRequestPaused(source, params) {
   }
 
   const requestUrl = params.request?.url || "";
-  if (state.redirectDelayEnabled && state.redirectDelayMs > 0 && consumeRedirectTarget(tabId, requestUrl)) {
-    notifyRedirectDelayStatus(tabId, true, state.redirectDelayMs);
-    await sleep(state.redirectDelayMs);
-    notifyRedirectDelayStatus(tabId, false, state.redirectDelayMs);
-  }
 
   if (session.passedCount < session.allowPassCount) {
     session.passedCount += 1;
@@ -308,21 +229,16 @@ chrome.debugger.onDetach.addListener((source) => {
     return;
   }
   state.pausedTabs.delete(source.tabId);
-  redirectTargetsByTab.delete(source.tabId);
   notifyStateToTab(source.tabId);
 });
-
-chrome.webRequest.onBeforeRedirect.addListener(
-  (details) => {
-    registerRedirectTarget(details.tabId, details.redirectUrl);
-  },
-  { urls: ["<all_urls>"] }
-);
 
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!Number.isInteger(details.tabId) || details.tabId < 0) {
       return;
+    }
+    if (state.redirectAutoPauseEnabled && isRedirectStatusCode(details.statusCode)) {
+      pauseRequests(details.tabId, 0).catch(() => {});
     }
     if (details.tabId !== state.displayTabId) {
       return;
@@ -358,8 +274,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     state.displayTabId = tabId;
     state.headerName = normalizeHeaderName(message.headerName);
     state.floatEnabled = Boolean(message.floatEnabled);
-    state.redirectDelayEnabled = Boolean(message.redirectDelayEnabled);
-    state.redirectDelayMs = normalizeDelayMs(message.redirectDelayMs);
+    state.redirectAutoPauseEnabled = Boolean(message.redirectAutoPauseEnabled);
     updateHeaderDisplay(state.displayTabId, state.headerName, state.latestHeaderValue);
     sendResponse({
       ok: true,
@@ -367,8 +282,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       headerName: state.headerName,
       headerValue: state.latestHeaderValue,
       floatEnabled: state.floatEnabled,
-      redirectDelayEnabled: state.redirectDelayEnabled,
-      redirectDelayMs: state.redirectDelayMs
+      redirectAutoPauseEnabled: state.redirectAutoPauseEnabled
     });
     return true;
   }
@@ -384,8 +298,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       headerName: state.headerName,
       headerValue: state.latestHeaderValue,
       floatEnabled: state.floatEnabled,
-      redirectDelayEnabled: state.redirectDelayEnabled,
-      redirectDelayMs: state.redirectDelayMs
+      redirectAutoPauseEnabled: state.redirectAutoPauseEnabled
     });
     return true;
   }
