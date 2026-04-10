@@ -124,6 +124,51 @@ function redirectSleepFloatPage(payload) {
   }
 }
 
+/**
+ * ページの MAIN world で実行される（window.open をラップ）。
+ * @param {number} ms
+ */
+function windowOpenDelayPage(ms) {
+  const delay = Math.min(120000, Math.max(0, Math.floor(Number(ms)) || 0));
+  if (window.__redirectDelayOrigOpen) {
+    window.open = window.__redirectDelayOrigOpen;
+    delete window.__redirectDelayOrigOpen;
+  }
+  if (delay <= 0) {
+    return;
+  }
+  const orig = window.open;
+  window.__redirectDelayOrigOpen = orig;
+  window.open = function () {
+    const until = Date.now() + delay;
+    while (Date.now() < until) {}
+    return orig.apply(window, arguments);
+  };
+}
+
+async function injectWindowOpenPatchIntoFrame(tabId, frameId, ms) {
+  const target =
+    typeof frameId === "number" && Number.isInteger(frameId)
+      ? { tabId, frameIds: [frameId] }
+      : { tabId };
+  try {
+    await chrome.scripting.executeScript({
+      target,
+      world: "MAIN",
+      func: windowOpenDelayPage,
+      args: [ms],
+      injectImmediately: true
+    });
+  } catch (_e1) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: windowOpenDelayPage,
+      args: [ms]
+    });
+  }
+}
+
 /** @param {{ phase: "sleeping" | "ended" | "armed"; targetUrl?: string; sleepMs?: number; reason?: string }} payload */
 async function sendRedirectSleepFloat(tabId, payload) {
   if (!Number.isInteger(tabId)) {
@@ -226,18 +271,11 @@ function isTopLevelMainFrameDocument(resourceType) {
 }
 
 /**
- * POST → 3xx → 次の GET/POST（メイン文書）の「間」にだけスリープを挟む。
- * - main_frame 以外の 3xx（XHR 等）では開始しない（誤った Document を待たない）。
- * - method が取れる環境では POST のレスポンスが 3xx のときだけ開始する。
+ * トップレベル（main_frame）のナビがリダイレクトするときだけ待機を開始する。
+ * GET / POST などメイン文書の遷移が対象。XHR 等は type が main_frame にならないため除外される。
  */
 function shouldBeginRedirectSleep(details) {
-  if (!isTopLevelMainFrameDocument(details.type)) {
-    return false;
-  }
-  if (details.method == null) {
-    return true;
-  }
-  return String(details.method).toUpperCase() === "POST";
+  return isTopLevelMainFrameDocument(details.type);
 }
 
 async function endRedirectSleepSession(tabId, reason = "normal") {
@@ -466,14 +504,20 @@ function registerExtensionListeners() {
       return true;
     }
 
-    if (message?.type === "getWindowOpenPatchConfig") {
+    if (message?.type === "applyWindowOpenPatch") {
       const tabId = sender.tab?.id;
-      sendResponse({
-        ok: Number.isInteger(tabId),
-        tabId,
-        extensionEnabled: state.extensionEnabled,
-        preWindowOpenSleepMs: state.preWindowOpenSleepMs
-      });
+      const frameId = sender.frameId;
+      if (!Number.isInteger(tabId)) {
+        sendResponse({ ok: false, error: "no tab" });
+        return true;
+      }
+      const ms =
+        state.extensionEnabled && state.preWindowOpenSleepMs > 0
+          ? state.preWindowOpenSleepMs
+          : 0;
+      injectWindowOpenPatchIntoFrame(tabId, frameId, ms)
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ ok: false, error: String(error) }));
       return true;
     }
 
