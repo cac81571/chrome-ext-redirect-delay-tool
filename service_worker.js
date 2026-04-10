@@ -351,7 +351,7 @@ function registerExtensionListeners() {
     }
   });
 
-  chrome.webRequest.onHeadersReceived.addListener(
+  chrome.webRequest.onBeforeRedirect.addListener(
     (details) => {
       if (!Number.isInteger(details.tabId) || details.tabId < 0) {
         return;
@@ -359,11 +359,24 @@ function registerExtensionListeners() {
       if (!state.extensionEnabled) {
         return;
       }
-      if (isRedirectStatusCode(details.statusCode)) {
-        const ms = normalizeSleepMs(state.redirectSleepMs);
-        if (ms > 0 && shouldBeginRedirectSleep(details)) {
-          beginRedirectSleep(details.tabId, ms).catch(() => {});
-        }
+      if (!isRedirectStatusCode(details.statusCode)) {
+        return;
+      }
+      const ms = normalizeSleepMs(state.redirectSleepMs);
+      if (ms > 0 && shouldBeginRedirectSleep(details)) {
+        beginRedirectSleep(details.tabId, ms).catch(() => {});
+      }
+    },
+    { urls: ["<all_urls>"] }
+  );
+
+  chrome.webRequest.onHeadersReceived.addListener(
+    (details) => {
+      if (!Number.isInteger(details.tabId) || details.tabId < 0) {
+        return;
+      }
+      if (!state.extensionEnabled) {
+        return;
       }
       if (details.tabId !== state.displayTabId) {
         return;
