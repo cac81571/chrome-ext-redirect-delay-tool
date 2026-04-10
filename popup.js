@@ -1,6 +1,7 @@
 const extensionSwitch = document.getElementById("extensionSwitch");
 const targetHeaderNameInput = document.getElementById("targetHeaderName");
 const redirectSleepMsInput = document.getElementById("redirectSleepMs");
+const preWindowOpenSleepMsInput = document.getElementById("preWindowOpenSleepMs");
 const saveButton = document.getElementById("saveButton");
 const saveStatusElement = document.getElementById("saveStatus");
 
@@ -49,6 +50,14 @@ function getRedirectSleepMs() {
   return Math.min(120000, Math.floor(value));
 }
 
+function getPreWindowOpenSleepMs() {
+  const value = Number(preWindowOpenSleepMsInput.value);
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.min(120000, Math.floor(value));
+}
+
 function setSaveStatus(message, isError = false) {
   saveStatusElement.textContent = message;
   saveStatusElement.classList.toggle("is-error", isError);
@@ -69,6 +78,9 @@ function applyConfigToForm(response) {
   redirectSleepMsInput.value = String(
     Number.isFinite(response.redirectSleepMs) ? response.redirectSleepMs : 1000
   );
+  preWindowOpenSleepMsInput.value = String(
+    Number.isFinite(response.preWindowOpenSleepMs) ? response.preWindowOpenSleepMs : 0
+  );
 }
 
 async function saveSettings() {
@@ -78,7 +90,8 @@ async function saveSettings() {
     tabId,
     headerName: getTargetHeaderName(),
     extensionEnabled: isExtensionOn(),
-    redirectSleepMs: getRedirectSleepMs()
+    redirectSleepMs: getRedirectSleepMs(),
+    preWindowOpenSleepMs: getPreWindowOpenSleepMs()
   });
   applyConfigToForm(response);
   setSaveStatus("保存しました。", false);
@@ -98,14 +111,30 @@ async function loadCurrentState() {
     redirectSleepMsInput.value = String(
       Number.isFinite(headerConfig.redirectSleepMs) ? headerConfig.redirectSleepMs : 1000
     );
+    preWindowOpenSleepMsInput.value = String(
+      Number.isFinite(headerConfig.preWindowOpenSleepMs) ? headerConfig.preWindowOpenSleepMs : 0
+    );
     setSaveStatus("", false);
   } catch (error) {
     setSaveStatus(`読み込みできません: ${error.message}`, true);
   }
 }
 
-extensionSwitch.addEventListener("click", () => {
-  setExtensionSwitch(!isExtensionOn());
+extensionSwitch.addEventListener("click", async () => {
+  const previous = isExtensionOn();
+  setExtensionSwitch(!previous);
+  try {
+    const tabId = await getActiveTabId();
+    await sendMessage({
+      type: "setExtensionEnabled",
+      tabId,
+      extensionEnabled: isExtensionOn()
+    });
+    setSaveStatus("", false);
+  } catch (error) {
+    setExtensionSwitch(previous);
+    setSaveStatus(`拡張の反映に失敗しました: ${error.message}`, true);
+  }
 });
 
 saveButton.addEventListener("click", async () => {

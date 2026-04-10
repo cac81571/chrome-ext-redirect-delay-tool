@@ -133,11 +133,25 @@
         value="1000"
         style="width: 120px; padding: 4px 6px"
       />
+      <label for="preWindowOpenSleepMs" style="margin-top: 10px">新規ウィンドウ（window.open）を開く前の待機（ミリ秒）</label>
+      <input
+        id="preWindowOpenSleepMs"
+        type="number"
+        min="0"
+        max="120000"
+        step="100"
+        value="0"
+        style="width: 120px; padding: 4px 6px"
+      />
       <div class="save-row">
         <button type="button" id="saveButton">保存</button>
         <span id="saveStatus" aria-live="polite"></span>
       </div>
-      <p class="hint">変更をストレージに反映するには「保存」を押してください。</p>
+      <p class="hint">
+        拡張機能の ON/OFF はスイッチ操作で即時に保存されます。<br />
+        ヘッダ名・待機時間などは「保存」が必要です。<br />
+        window.open の待機はページのメインスレッドを一時停止します。target=_blank のリンクのみでは効きません。
+      </p>
     </div>
     <script src="popup.js"></script>
   </body>

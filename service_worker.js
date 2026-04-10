@@ -10,14 +10,17 @@ const state = {
   latestHeaderValue: "",
   /** 拡張全体の ON/OFF（ヘッダフロート・リダイレクト待機の両方） */
   extensionEnabled: true,
-  redirectSleepMs: 1000
+  redirectSleepMs: 1000,
+  /** window.open 呼び出し直前の待機（ミリ秒）。0 で無効 */
+  preWindowOpenSleepMs: 0
 };
 
 async function persistHeaderDisplaySettings() {
   await chrome.storage.local.set({
     headerDisplayHeaderName: state.headerName,
     headerDisplayExtensionEnabled: state.extensionEnabled,
-    headerDisplayRedirectSleepMs: state.redirectSleepMs
+    headerDisplayRedirectSleepMs: state.redirectSleepMs,
+    headerDisplayPreWindowOpenSleepMs: state.preWindowOpenSleepMs
   });
 }
 
@@ -354,6 +357,9 @@ function registerExtensionListeners() {
       state.headerName = normalizeHeaderName(message.headerName);
       state.extensionEnabled = Boolean(message.extensionEnabled);
       state.redirectSleepMs = normalizeSleepMs(message.redirectSleepMs ?? state.redirectSleepMs);
+      state.preWindowOpenSleepMs = normalizeSleepMs(
+        message.preWindowOpenSleepMs ?? state.preWindowOpenSleepMs
+      );
       updateHeaderDisplay(state.displayTabId, state.headerName, state.latestHeaderValue);
       persistHeaderDisplaySettings()
         .then(() => {
@@ -363,7 +369,8 @@ function registerExtensionListeners() {
             headerName: state.headerName,
             headerValue: state.latestHeaderValue,
             extensionEnabled: state.extensionEnabled,
-            redirectSleepMs: state.redirectSleepMs
+            redirectSleepMs: state.redirectSleepMs,
+            preWindowOpenSleepMs: state.preWindowOpenSleepMs
           });
         })
         .catch((error) => {
@@ -383,7 +390,39 @@ function registerExtensionListeners() {
         headerName: state.headerName,
         headerValue: state.latestHeaderValue,
         extensionEnabled: state.extensionEnabled,
-        redirectSleepMs: state.redirectSleepMs
+        redirectSleepMs: state.redirectSleepMs,
+        preWindowOpenSleepMs: state.preWindowOpenSleepMs
+      });
+      return true;
+    }
+
+    if (message?.type === "setExtensionEnabled") {
+      const tabId = Number.isInteger(message.tabId) ? message.tabId : sender.tab?.id;
+      if (Number.isInteger(tabId)) {
+        state.displayTabId = tabId;
+      }
+      state.extensionEnabled = Boolean(message.extensionEnabled);
+      updateHeaderDisplay(state.displayTabId, state.headerName, state.latestHeaderValue);
+      persistHeaderDisplaySettings()
+        .then(() => {
+          sendResponse({
+            ok: true,
+            extensionEnabled: state.extensionEnabled
+          });
+        })
+        .catch((error) => {
+          sendResponse({ ok: false, error: String(error) });
+        });
+      return true;
+    }
+
+    if (message?.type === "getWindowOpenPatchConfig") {
+      const tabId = sender.tab?.id;
+      sendResponse({
+        ok: Number.isInteger(tabId),
+        tabId,
+        extensionEnabled: state.extensionEnabled,
+        preWindowOpenSleepMs: state.preWindowOpenSleepMs
       });
       return true;
     }
@@ -409,6 +448,11 @@ chrome.storage.local
       state.redirectSleepMs = normalizeSleepMs(all.headerDisplayRedirectSleepMs);
     } else {
       state.redirectSleepMs = 1000;
+    }
+    if (Number.isFinite(all?.headerDisplayPreWindowOpenSleepMs)) {
+      state.preWindowOpenSleepMs = normalizeSleepMs(all.headerDisplayPreWindowOpenSleepMs);
+    } else {
+      state.preWindowOpenSleepMs = 0;
     }
     registerExtensionListeners();
   })
