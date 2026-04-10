@@ -225,6 +225,21 @@ function isTopLevelMainFrameDocument(resourceType) {
   return resourceType === "main_frame";
 }
 
+/**
+ * POST → 3xx → 次の GET/POST（メイン文書）の「間」にだけスリープを挟む。
+ * - main_frame 以外の 3xx（XHR 等）では開始しない（誤った Document を待たない）。
+ * - method が取れる環境では POST のレスポンスが 3xx のときだけ開始する。
+ */
+function shouldBeginRedirectSleep(details) {
+  if (!isTopLevelMainFrameDocument(details.type)) {
+    return false;
+  }
+  if (details.method == null) {
+    return true;
+  }
+  return String(details.method).toUpperCase() === "POST";
+}
+
 async function endRedirectSleepSession(tabId, reason = "normal") {
   const session = state.redirectSleepSessions.get(tabId);
   if (!session) {
@@ -253,6 +268,14 @@ async function beginRedirectSleep(tabId, ms) {
   }
   await endRedirectSleepSession(tabId, "replaced");
   await attachDebugger(tabId);
+  let mainFrameFrameId = null;
+  try {
+    await sendDebuggerCommand(tabId, "Page.enable");
+    const frameTreeResult = await sendDebuggerCommand(tabId, "Page.getFrameTree", {});
+    mainFrameFrameId = frameTreeResult?.frameTree?.frame?.id ?? null;
+  } catch (_error) {
+    mainFrameFrameId = null;
+  }
   try {
     await sendDebuggerCommand(tabId, "Fetch.enable", {
       patterns: [{ urlPattern: "*", requestStage: "Request" }]
@@ -261,10 +284,15 @@ async function beginRedirectSleep(tabId, ms) {
     await detachDebugger(tabId).catch(() => {});
     throw error;
   }
+
   const safetyTimerId = setTimeout(() => {
     endRedirectSleepSession(tabId, "timeout").catch(() => {});
   }, 15000);
-  state.redirectSleepSessions.set(tabId, { ms: delayMs, safetyTimerId });
+  state.redirectSleepSessions.set(tabId, {
+    ms: delayMs,
+    safetyTimerId,
+    mainFrameFrameId
+  });
 }
 
 async function handleFetchRequestPaused(source, params) {
@@ -276,6 +304,15 @@ async function handleFetchRequestPaused(source, params) {
 
   const resourceType = String(params.resourceType || "");
   if (resourceType !== "Document") {
+    await sendDebuggerCommand(tabId, "Fetch.continueRequest", {
+      requestId: params.requestId
+    }).catch(() => {});
+    return;
+  }
+
+  const frameId = params.frameId != null ? String(params.frameId) : null;
+  const mainId = sleepSession.mainFrameFrameId != null ? String(sleepSession.mainFrameFrameId) : null;
+  if (mainId != null && frameId != null && frameId !== mainId) {
     await sendDebuggerCommand(tabId, "Fetch.continueRequest", {
       requestId: params.requestId
     }).catch(() => {});
@@ -324,7 +361,7 @@ function registerExtensionListeners() {
       }
       if (isRedirectStatusCode(details.statusCode)) {
         const ms = normalizeSleepMs(state.redirectSleepMs);
-        if (ms > 0) {
+        if (ms > 0 && shouldBeginRedirectSleep(details)) {
           beginRedirectSleep(details.tabId, ms).catch(() => {});
         }
       }
